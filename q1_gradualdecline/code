@@ -1,0 +1,312 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Quantitative Genetic Model 
+def evolutionary_rescue_simulation(
+    N0=1000, Nc=50, d0=2.0, P=0.1, w=1.0,
+    h2=0.5, Wmax=1.3, env_change_rate=0.0, env_change_duration=0,
+    max_time=100
+):
+    # Equation (5): k determines speed of adaptation
+    k = (w + (1 - h2) * P) / (w + P)
+
+    # Max mean fitness if mean phenotype reaches optimum (W bar at d=0)
+    W_opt = Wmax * np.sqrt(w / (P + w))  # Derived from Gaussian fitness curve
+
+    # Initialize state
+    N = N0        # Initial population size
+    d = d0        # Initial mean phenotype distance from optimum
+    tE, tR, tP = np.inf, np.inf, np.inf  # Initialize critical time points
+    reached_critical = False            # Has N fallen below Nc?
+    rose_above_critical = False         # Has N risen back above Nc?
+
+    # Record history of simulation
+    times = [0]
+    Ns = [N0]
+    ds = [d0]
+    Ws = [Wmax * np.exp(-d0**2 / (2 * (P + w)))]  # Eq. (6): mean fitness
+
+    for t in range(1, max_time + 1):
+        # Gradual environmental shift: move optimum by fixed amount
+        optimum_shift = env_change_rate if t <= env_change_duration else 0
+
+        # Eq. (5) phenotypic recursion with moving optimum
+        d = k * (d + optimum_shift)
+
+        # Eq. (6): mean fitness under Gaussian selection
+        W_t = Wmax * np.exp(-d**2 / (2 * (P + w)))
+
+        # Eq. (3): population dynamics (density-independent)
+        N = N * W_t
+
+        # Store results
+        times.append(t)
+        Ns.append(N)
+        ds.append(d)
+        Ws.append(W_t)
+
+        # Mark first time below critical threshold
+        if not reached_critical and N < Nc:
+            tE = t
+            reached_critical = True
+
+        # Mark time when population rises above Nc again
+        if reached_critical and not rose_above_critical and N > Nc:
+            tP = t
+            rose_above_critical = True
+
+        # Record when growth exceeds 1 (population starts recovering)
+        if W_t > 1 and tR == np.inf:
+            tR = t
+
+        # Stop simulation if extinct or unrealistically large
+        if N < 1e-6 or N > 1e12:
+            break
+
+    # Duration of time spent below Nc
+    period_at_risk = 0 if tP == np.inf else (tP - tE)
+
+    return {
+        'times': times,
+        'N': Ns,
+        'd': ds,
+        'W': Ws,
+        'tE': tE,
+        'tR': tR,
+        'tP': tP,
+        'period_at_risk': period_at_risk,
+        'W_opt': W_opt
+    }
+
+def plot_results(results, Nc):
+    times = results['times']
+    Ns = results['N']
+    ds = results['d']
+    Ws = results['W']
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+
+    # Plot population size over time
+    ax1.plot(times, Ns)
+    ax1.axhline(y=Nc, color='red', linestyle='--', label='Critical size Nc')  # Reference line
+    ax1.set_yscale('log')
+    ax1.set_ylabel('Population size (N)')
+    ax1.legend()
+    ax1.set_title('Population Dynamics')
+
+    # Plot key times: tE, tR, tP
+    for time, label, color in zip(
+        [results['tE'], results['tR'], results['tP']],
+        ['tE (below Nc)', 'tR (W > 1)', 'tP (recovery)'],
+        ['orange', 'green', 'purple']
+    ):
+        if time < np.inf:
+            ax1.axvline(x=time, linestyle=':', color=color, label=label)
+    ax1.legend()
+
+    # Plot phenotypic distance from optimum
+    ax2.plot(times, ds)
+    ax2.axhline(0, color='gray', linestyle='--')  # Optimal phenotype
+    ax2.set_ylabel('Mean phenotype distance (d)')
+    ax2.set_title('Phenotypic Distance from Optimum')
+
+    # Plot mean fitness
+    ax3.plot(times, Ws)
+    ax3.axhline(1, color='gray', linestyle='--', label='W = 1')  # Growth threshold
+    ax3.axhline(results['W_opt'], color='blue', linestyle='--', label=f'Wopt = {results["W_opt"]:.2f}')
+    ax3.set_ylabel('Mean fitness (W)')
+    ax3.set_xlabel('Generation')
+    ax3.set_title('Mean Fitness Over Time')
+    ax3.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+# Run full evolutionary rescue simulation using default parameters
+results = evolutionary_rescue_simulation()
+
+# Plot simulation results with critical population size Nc=50
+plot_results(results, Nc=50)
+
+def simple_two_step_model(N0=1000, Nc=50, W0=0.9, delta=0.01, max_time=100):
+    """
+    Implements the simplified two-step model.
+    From paper:
+    tE = (ln Nc - ln N0) / ln W0
+    tR = (1 - W0) / delta
+    """
+    # Time to hit Nc assuming constant decay
+    tE = np.log(Nc / N0) / np.log(W0)  # Eq. (2) in paper
+
+    # Time to evolve W > 1 assuming constant fitness gain delta
+    tR = (1 - W0) / delta
+
+    # Fitness trajectory: W_t = W0 + delta * t
+    times = np.arange(0, max_time + 1)
+    W_t = np.clip(W0 + delta * times, a_min=0, a_max=None)
+
+    # Population: N_t = N0 * product of W_t up to time t
+    N_t = N0 * np.cumprod(W_t)
+
+    return {
+        "times": times,
+        "W_t": W_t,
+        "N_t": N_t,
+        "tE": tE,
+        "tR": tR
+    }
+
+def plot_simple_model(results, Nc):
+    times = results["times"]
+    N_t = results["N_t"]
+    W_t = results["W_t"]
+    tE = results["tE"]
+    tR = results["tR"]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+    # Plot population size with log-scale
+    ax1.plot(times, N_t, label="N(t)")
+    ax1.axhline(Nc, color='red', linestyle='--', label=f"Critical size Nc = {Nc}")
+    ax1.axvline(tE, color='orange', linestyle=':', label=f"tE = {tE:.1f}")
+    ax1.axvline(tR, color='green', linestyle=':', label=f"tR = {tR:.1f}")
+    ax1.set_yscale('log')
+    ax1.set_ylabel('Population Size (N)')
+    ax1.set_title('Simple Two-Step Evolutionary Rescue Model')
+    ax1.legend()
+
+    # Plot fitness over time
+    ax2.plot(times, W_t, label='Fitness W(t)', color='purple')
+    ax2.axhline(1, color='gray', linestyle='--', label='W = 1 (threshold for growth)')
+    ax2.set_ylabel('Mean Fitness (W)')
+    ax2.set_xlabel('Generation')
+    ax2.legend()
+
+    plt.tight_layout()
+    plt.show() 
+
+# Run the simple two-step model with specified parameters
+results = simple_two_step_model(N0=1000, Nc=50, W0=0.9, delta=0.01)
+
+# Plot the simple model results using Nc=50
+plot_simple_model(results, Nc=50)
+
+### **Summary of Key Changes Compared to Gomulkiewicz & Holt (1995)**
+
+1. **Environmental Change Pattern**  
+   - **Original Model**: Assumes a sudden, one-time shift in the environmental optimum.  
+   - **New Model**: Simulates a gradual shift in the optimum over generations, mimicking real-world processes like climate change.
+
+2. **Trait Evolution Mechanism**  
+   - **Original**: Uses a deterministic recursion equation to track mean trait value over time.  
+   - **New**: Implements a stochastic, individual-based simulation, where traits are inherited with variation and subject to fitness-based survival.
+
+3. **Fitness Function**  
+   - **Same in both models**: Fitness declines with the squared distance from the optimum, representing stabilizing selection.
+
+4. **Population Dynamics**  
+   - **Original**: Focuses on trait dynamics; population size is not explicitly modeled.  
+   - **New**: Includes population survival, reproduction, and carrying capacity. Population size can decline or go extinct.
+
+5. **Stochasticity**  
+   - **Original**: Fully deterministic — no randomness in outcomes.  
+   - **New**: Introduces randomness in survival (via binomial sampling based on fitness) and in trait inheritance (via Gaussian sampling), capturing more realistic biological variability.
+
+6. **Reproduction Model**  
+   - **Original**: Implicit via deterministic equations.  
+   - **New**: Explicit reproduction — surviving individuals produce offspring with traits centered around the parental mean, introducing variation and simulating generational turnover.
+
+# Our project model
+def gradual_change_model(
+    N0=1000,         # Initial population size
+    G=100,           # Total number of generations to simulate
+    z0=0.0,          # Initial mean trait value of the population
+    sigma_z=1.0,     # Trait variance (assumed to stay constant)
+    opt0=0.0,        # Initial environmental optimum
+    opt_rate=0.05,   # Rate at which the optimum shifts each generation
+    s=0.1,           # Strength of stabilizing selection (higher = stronger selection)
+    K=10000          # Carrying capacity (upper limit on population size)
+):
+
+    # Initialize the population trait values using a normal distribution
+    # Individuals are sampled around initial mean z0 with variance sigma_z^2
+    population = np.random.normal(loc=z0, scale=sigma_z, size=N0)
+
+    # Prepare lists to store simulation results
+    mean_fitness_over_time = []
+    pop_sizes = []
+    mean_traits = []
+
+    # Begin simulation over G generations
+    for t in range(G):
+
+        # Gradual shift in environmental optimum — DIFFERENCE from paper
+        # Instead of a sudden shift, allow the optimum to move slightly each generation
+        optimum = opt0 + opt_rate * t
+
+        # Fitness based on distance from moving optimum
+        # Matches stabilizing selection from Gomulkiewicz & Holt, i.e., fitness declines with squared distance from optimum
+        fitness = np.exp(-s * (population - optimum) ** 2)
+
+        # Survival is probabilistic — based on fitness
+        # Each individual survives with probability equal to its fitness (between 0 and 1)
+        # This introduces stochasticity compared to the paper's deterministic model
+        survivors = np.random.binomial(1, fitness)  # 1 = survives, 0 = dies
+        population = population[survivors == 1]      # Keep only surviving individuals
+
+        # If the entire population dies out, stop simulation early
+        if len(population) == 0:
+            mean_fitness_over_time.append(0)
+            pop_sizes.append(0)
+            mean_traits.append(np.nan)
+            break
+
+        # Reproduction: survivors generate the next generation
+        # Assume each survivor produces 2 offspring (could be changed)
+        # Offspring inherit mean trait of survivors + Gaussian noise (variance = sigma_z^2)
+        N_next = min(len(population) * 2, K)  # Enforce carrying capacity
+        new_gen = np.random.normal(
+            loc=np.mean(population),         # offspring mean around parents' mean
+            scale=sigma_z,                   # trait variance maintained
+            size=N_next                      # total number of offspring
+        )
+        population = new_gen  # Replace current population with new generation
+
+        # Record statistics for this generation
+        mean_fitness_over_time.append(np.mean(fitness))     # Average fitness
+        pop_sizes.append(len(population))                   # Population size
+        mean_traits.append(np.mean(population))             # Mean trait value
+
+    # Return the simulation results for plotting or analysis
+    return {
+        "fitness": mean_fitness_over_time,
+        "size": pop_sizes,
+        "traits": mean_traits
+    }
+
+def plot_gradual_model(results):
+    generations = np.arange(len(results["fitness"]))
+    fig, ax = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
+
+    # Plot average fitness over time
+    ax[0].plot(generations, results["fitness"], label="Mean Fitness")
+    ax[0].set_ylabel("Fitness")
+    ax[0].legend()
+
+    # Plot population size over time
+    ax[1].plot(generations, results["size"], label="Population Size", color="orange")
+    ax[1].set_ylabel("Population Size")
+    ax[1].legend()
+
+    # Plot trait mean over time
+    ax[2].plot(generations, results["traits"], label="Mean Trait", color="green")
+    ax[2].set_ylabel("Mean Trait")
+    ax[2].set_xlabel("Number of Generations")
+    ax[2].legend()
+
+    plt.tight_layout()
+    plt.show()
+
+# Run the model
+results_gradual = gradual_change_model()
+plot_gradual_model(results_gradual)
